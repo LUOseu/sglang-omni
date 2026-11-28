@@ -8,6 +8,7 @@ from sglang.srt.arg_groups.model_override_base import resolved_view
 from sglang.srt.server_args import ServerArgs
 
 from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 from sglang_omni.utils.gpu_compat import apply_torch_compile_cache_env
 from sglang_omni.vendor.sglang.server_args import override_server_args
 
@@ -104,6 +105,11 @@ def build_sglang_server_args(
     else:
         pass
     kwargs.update(overrides)
+    if str(kwargs.get("speculative_algorithm")).upper() == "DSPINE":
+        resolve_speculative_algorithm("DSPINE")
+        kwargs["speculative_algorithm"] = "DSPINE"
+    else:
+        pass
     normalize_decode_cuda_graph_overrides(kwargs)
     # Existing Omni models remain eager-prefill by default. Models that have
     # adapted SGLang's phase-specific prefill contract opt in explicitly

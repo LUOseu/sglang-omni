@@ -612,14 +612,14 @@ def test_a_session_speech_thinker_keeps_its_speculative_draft(monkeypatch) -> No
         ({"speculative_algorithm": "EAGLE3"}, "needs speculative_draft_model_path"),
         (
             {"speculative_algorithm": "NGRAM", "speculative_draft_model_path": "draft"},
-            "supports DFLASH and EAGLE3",
+            "supports DFLASH, DSPINE and EAGLE3",
         ),
         (
             {
                 "speculative_algorithm": "DSPARK",
                 "speculative_draft_model_path": "draft",
             },
-            "supports DFLASH and EAGLE3",
+            "supports DFLASH, DSPINE and EAGLE3",
         ),
     ],
 )

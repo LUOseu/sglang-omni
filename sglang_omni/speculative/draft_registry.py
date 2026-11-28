@@ -19,7 +19,7 @@ class PinnedDraft:
 
     model_path: str
     stage: str
-    algorithm: Literal["DFLASH", "DSPARK", "EAGLE3", "STANDALONE", "NEXTN"]
+    algorithm: Literal["DFLASH", "DSPINE", "DSPARK", "EAGLE3", "STANDALONE", "NEXTN"]
     draft_model_path: str
     draft_model_revision: str
     engine_settings: dict[str, int | str] = field(default_factory=dict)

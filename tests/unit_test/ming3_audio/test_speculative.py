@@ -11,6 +11,8 @@ from unittest.mock import Mock
 import pytest
 import torch
 from pydantic import JsonValue
+from sglang.srt.arg_groups.model_override_base import resolved_view
+from sglang.srt.speculative.dflash_worker_v2 import DFlashWorkerV2
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
 import sglang_omni.platforms as platforms
@@ -80,7 +82,7 @@ def test_dflash_draft_is_served_synchronously_from_a_loadable_copy(
         ({"speculative_num_draft_tokens": 12}, True, 32),
         ({"speculative_num_draft_tokens": 8}, True, 16),
         (
-            {"speculative_dflash_block_size": 32, "speculative_num_draft_tokens": 8},
+            {"speculative_dflash_block_size": 32},
             True,
             64,
         ),
@@ -90,7 +92,7 @@ def test_dflash_draft_is_served_synchronously_from_a_loadable_copy(
         "checkpoint-block",
         "non-power-of-two",
         "smaller-block",
-        "dflash-block-size-wins",
+        "explicit-dflash-block-size",
         "operator-off",
     ],
 )
@@ -110,6 +112,177 @@ def test_dflash_verify_replays_accepted_inputs_with_a_ring_that_fits_the_block(
     stages.prepare_draft_checkpoint(overrides).cleanup()
     assert overrides["enable_linear_replayssm_spec"] is expected_replay
     assert overrides.get("linear_replayssm_cache_len") == expected_ring_length
+
+
+@pytest.mark.parametrize(
+    "ring_length",
+    [8, 16, 40],
+    ids=["below-block", "no-absorb-room", "non-power-of-two"],
+)
+def test_dflash_rejects_a_ring_that_the_kda_pool_cannot_allocate(
+    tmp_path: Path,
+    ring_length: int,
+) -> None:
+    write_dflash_checkpoint(tmp_path)
+    with pytest.raises(
+        ValueError, match=rf"linear_replayssm_cache_len={ring_length}.*16"
+    ):
+        stages.prepare_draft_checkpoint(
+            {
+                "speculative_draft_model_path": str(tmp_path),
+                "speculative_num_draft_tokens": 16,
+                "linear_replayssm_cache_len": ring_length,
+            }
+        )
+
+
+def test_disabled_draft_removes_spec_verify_but_preserves_decode_ring() -> None:
+    manager = ConfigManager(Ming3AudioPipelineConfig(model_path="ming"))
+    pipeline = manager.merge_config(
+        manager.parse_extra_args(
+            [
+                "--thinker.engine.speculative_algorithm",
+                "DFLASH",
+                "--thinker.engine.enable_linear_replayssm_spec",
+                "true",
+                "--thinker.engine.linear_replayssm_cache_len",
+                "32",
+                "--thinker.engine.disable_speculative_decoding",
+                "true",
+            ]
+        )
+    )
+    overrides = pipeline.stage_named("thinker").engine.overrides()
+    assert "enable_linear_replayssm_spec" not in overrides
+    assert overrides["linear_replayssm_cache_len"] == 32
+
+
+@pytest.mark.accelerator
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA DFlash ServerArgs are required"
+)
+def test_ming_replayssm_reaches_resolved_server_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "config.json").write_bytes((FIXTURES / "config.json").read_bytes())
+    draft = tmp_path / "draft"
+    draft.mkdir()
+    write_dflash_checkpoint(draft)
+
+    class StopBeforeWeights(Exception):
+        pass
+
+    infrastructure = Mock(side_effect=StopBeforeWeights)
+    monkeypatch.setattr(stages, "create_sglang_infrastructure", infrastructure)
+    manager = ConfigManager(Ming3AudioPipelineConfig(model_path=str(target)))
+    pipeline = manager.merge_config(
+        manager.parse_extra_args(
+            [
+                "--thinker.factory.device",
+                "cpu",
+                "--thinker.engine.device",
+                "cuda",
+                "--thinker.engine.speculative_algorithm",
+                "DFLASH",
+                "--thinker.engine.speculative_draft_model_path",
+                str(draft),
+                "--thinker.engine.speculative_num_draft_tokens",
+                "15",
+                "--thinker.engine.enable_linear_replayssm_spec",
+                "true",
+                "--thinker.engine.linear_replayssm_cache_len",
+                "64",
+                "--thinker.engine.disable_radix_cache",
+                "false",
+            ]
+        )
+    )
+    with pytest.raises(StopBeforeWeights):
+        stages.create_thinker_executor(
+            **resolve_stage_factory_args(pipeline.stage_named("thinker"), pipeline)
+        )
+    cfg = resolved_view(infrastructure.call_args.args[0])
+    assert cfg.speculative_algorithm == "DFLASH"
+    assert cfg.enable_linear_replayssm_spec and cfg.linear_replayssm_cache_len == 64
+    assert cfg.speculative_num_draft_tokens == 15 and cfg.disable_radix_cache
+    assert "disable_radix_cache" in caplog.text
+
+
+def test_dspine_draft_never_falls_back_on_a_runtime_without_dspine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = SpeculativeAlgorithm.from_string
+
+    def without_dspine(name: str | None):
+        if name and name.upper() == "DSPINE":
+            raise ValueError("Unknown speculative algorithm name: DSPINE")
+        return original(name)
+
+    monkeypatch.setattr(SpeculativeAlgorithm, "from_string", without_dspine)
+    write_dflash_checkpoint(tmp_path)
+    with pytest.raises(ValueError, match="DSPINE.*SGLang.*DSpine"):
+        stages.create_thinker_executor(
+            "ming",
+            max_seq_len=256,
+            enable_async_decode=False,
+            device="cpu",
+            server_args_overrides={
+                "speculative_algorithm": "dspine",
+                "speculative_draft_model_path": str(tmp_path),
+            },
+        )
+
+
+def test_native_dspine_keeps_checkpoint_revision_and_full_vocabulary_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The pinned SGLang predates the upstream DSPINE alias. Model its public parser contract.
+    original = SpeculativeAlgorithm.from_string
+    monkeypatch.setattr(
+        SpeculativeAlgorithm,
+        "from_string",
+        lambda name: (
+            SpeculativeAlgorithm.DFLASH
+            if name and name.upper() == "DSPINE"
+            else original(name)
+        ),
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"architectures": ["DSpineDraftModel"], "block_size": 16})
+    )
+    build = Mock()
+    monkeypatch.setattr(stages, "build_sglang_server_args", build)
+
+    class StopBeforeWeights(Exception):
+        pass
+
+    infrastructure = Mock(side_effect=StopBeforeWeights)
+    monkeypatch.setattr(stages, "create_sglang_infrastructure", infrastructure)
+    with pytest.raises(StopBeforeWeights):
+        stages.create_thinker_executor(
+            "ming",
+            max_seq_len=256,
+            enable_async_decode=False,
+            device="cpu",
+            server_args_overrides={
+                "speculative_algorithm": "dspine",
+                "speculative_draft_model_path": str(tmp_path),
+                "speculative_draft_model_revision": "trained-revision",
+            },
+        )
+    forwarded = build.call_args.kwargs
+    assert forwarded["speculative_algorithm"] == "DSPINE"
+    assert forwarded["speculative_draft_model_path"] == str(tmp_path)
+    assert forwarded["speculative_draft_model_revision"] == "trained-revision"
+    assert (
+        forwarded["enable_linear_replayssm_spec"]
+        and forwarded["linear_replayssm_cache_len"] == 32
+    )
+    assert "json_model_override_args" not in forwarded
+    assert infrastructure.call_args.kwargs["speculative_worker_class"] is DFlashWorkerV2
 
 
 def test_dflash_draft_keeps_its_own_architecture(
@@ -162,6 +335,8 @@ def test_dflash_draft_keeps_its_own_architecture(
     server_overrides = infrastructure.call_args.args[0]
     assert "json_model_override_args" not in server_overrides
     assert server_overrides["speculative_algorithm"] == "DFLASH"
+    assert server_overrides["enable_linear_replayssm_spec"] is True
+    assert server_overrides["linear_replayssm_cache_len"] == 32
     assert server_overrides["disable_overlap_schedule"] is True
     [draft_config] = draft_configs
     assert draft_config["architectures"] == ["ReducedVocabularyDFlashDraftModel"]

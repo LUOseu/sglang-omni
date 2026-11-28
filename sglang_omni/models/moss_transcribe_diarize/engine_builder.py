@@ -11,7 +11,6 @@ from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from sglang.srt.mem_cache.allocation_sizing import get_alloc_reserve_per_decode
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 from sglang_omni.model_runner.base import ModelRunner
@@ -38,6 +37,7 @@ from sglang_omni.scheduling.generation_batch_policy import (
     get_prefill_cuda_graph_backend,
 )
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 
 if TYPE_CHECKING:
 
@@ -245,7 +245,7 @@ class MossTranscribeDiarizeEngineBuilder(
             pass
 
         draft_model_path = overrides.get("speculative_draft_model_path")
-        speculative_algorithm = SpeculativeAlgorithm.from_string(
+        speculative_algorithm = resolve_speculative_algorithm(
             overrides.get("speculative_algorithm")
         )
         if speculative_algorithm.is_none():
@@ -259,7 +259,7 @@ class MossTranscribeDiarizeEngineBuilder(
                 pass
         elif not speculative_algorithm.is_dflash():
             raise ValueError(
-                f"{self.model_name} speculative decoding supports DFLASH, "
+                f"{self.model_name} speculative decoding supports DFLASH or DSPINE, "
                 f"not {speculative_algorithm.name}"
             )
         elif draft_model_path is None:
@@ -270,20 +270,12 @@ class MossTranscribeDiarizeEngineBuilder(
             raise ValueError(f"{self.model_name} DFLASH needs a CUDA GPU")
         else:
             # note (wilsonzheng0327): hosts without a draft never load its kernels.
-            from sglang_omni.speculative.dflash_draft import (
-                draft_worker_class,
-                materialize_draft_checkpoint,
-            )
+            from sglang_omni.speculative.dflash_draft import prepare_dflash_worker
 
             # note (wilsonzheng0327): SGLang reads the draft config while resolving
             # the server args, so the flat copy must exist before that.
-            self.draft_checkpoint = materialize_draft_checkpoint(
-                str(draft_model_path), overrides.get("speculative_draft_model_revision")
-            )
-            overrides["speculative_draft_model_path"] = self.draft_checkpoint.name
-            overrides["speculative_draft_model_revision"] = None
-            self.speculative_worker_class = draft_worker_class(
-                self.draft_checkpoint.name
+            self.draft_checkpoint, self.speculative_worker_class = (
+                prepare_dflash_worker(overrides, supports_selector=True)
             )
             # note (Zhenning Guo): async decode under a draft means speculative overlap, which is on by default; plain fallback needs the synchronous verify loop, so it keeps overlap off.
             if self.enable_async_decode is None:

@@ -741,7 +741,7 @@ def test_speech_capture_copies_the_prefill_ceiling_and_text_capture_stays_empty(
         ({"speculative_algorithm": "DSPARK"}, "needs speculative_draft_model_path"),
         (
             {"speculative_algorithm": "NGRAM", "speculative_draft_model_path": "draft"},
-            "supports EAGLE3, DFLASH and DSPARK",
+            "supports EAGLE3, DFLASH, DSPINE and DSPARK",
         ),
         (
             {
@@ -759,6 +759,43 @@ def test_the_thinker_stage_checks_the_algorithm_draft_and_mixed_chunk_together(
     with pytest.raises(ValueError, match=message):
         stages_module.create_sglang_thinker_executor_from_config(
             "dummy", server_args_overrides=speculative_overrides
+        )
+
+
+def test_dspine_checks_the_normalized_backbone_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+    from sglang_omni.vendor.sglang import hf_transformers
+
+    nested = {
+        "speculators_model_type": "dspine",
+        "transformer_layer_config": {"max_position_embeddings": 4096},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(nested))
+    monkeypatch.setattr(
+        SpeculativeAlgorithm, "from_string", lambda name: SpeculativeAlgorithm.DFLASH
+    )
+
+    def native_config(path, *, revision, trust_remote_code):
+        assert revision == "draft-revision" and not trust_remote_code
+        config = json.loads((Path(path) / "config.json").read_text())
+        return SimpleNamespace(**config["transformer_layer_config"])
+
+    monkeypatch.setattr(hf_transformers, "get_config", native_config, raising=False)
+    with pytest.raises(ValueError, match="exceeds the draft's 4096"):
+        stages_module.create_sglang_thinker_executor_from_config(
+            "dummy",
+            max_seq_len=8192,
+            server_args_overrides={
+                "speculative_algorithm": "DSPINE",
+                "speculative_draft_model_path": str(tmp_path),
+                "speculative_draft_model_revision": "draft-revision",
+            },
         )
 
 

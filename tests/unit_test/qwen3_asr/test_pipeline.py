@@ -440,7 +440,7 @@ def test_qwen3_asr_adapter_sampling_policy(
 ) -> None:
     builder = make_engine_builder()
     builder.device = "mps" if device == "mps" else None
-    builder.draft_checkpoint = Mock() if has_draft else None
+    builder.speculative_worker_class = Mock() if has_draft else None
     monkeypatch.setattr(
         qwen3_asr_builder.current_platform, "is_npu", lambda: device == "npu"
     )
@@ -739,7 +739,7 @@ def test_qwen3_asr_stage_import_without_dflash() -> None:
         ("mps", 1, "DFLASH", "one CUDA GPU or Ascend NPU"),
         ("cuda", 2, "DFLASH", "one CUDA GPU or Ascend NPU"),
         ("npu", 2, "DFLASH", "one CUDA GPU or Ascend NPU"),
-        ("npu", 1, "EAGLE3", "supports DFLASH only"),
+        ("npu", 1, "EAGLE3", "supports DFLASH or DSPINE"),
     ],
 )
 def test_qwen3_asr_dflash_rejects_unsupported_runtime_before_loading_draft(

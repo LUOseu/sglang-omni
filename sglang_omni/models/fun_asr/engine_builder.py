@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from collections.abc import Callable
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
@@ -14,7 +12,6 @@ from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from sglang.srt.mem_cache.allocation_sizing import get_alloc_reserve_per_decode
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from sglang_omni.model_runner.base import ModelRunner
@@ -41,6 +38,7 @@ from sglang_omni.scheduling.generation_batch_policy import (
     build_default_prefill_cuda_graph_bs,
 )
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
 
 if TYPE_CHECKING:
@@ -154,7 +152,7 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
             pass
 
         draft_model_path = overrides.get("speculative_draft_model_path")
-        speculative_algorithm = SpeculativeAlgorithm.from_string(
+        speculative_algorithm = resolve_speculative_algorithm(
             overrides.get("speculative_algorithm")
         )
         if speculative_algorithm.is_none():
@@ -166,7 +164,7 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
                 pass
         elif not speculative_algorithm.is_dflash():
             raise ValueError(
-                f"{self.model_name} speculative decoding supports DFLASH, "
+                f"{self.model_name} speculative decoding supports DFLASH or DSPINE, "
                 f"not {speculative_algorithm.name}"
             )
         elif draft_model_path is None:
@@ -178,40 +176,21 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
         else:
             # note (wilsonzheng0327): hosts without a draft never load its kernels.
             from sglang_omni.speculative.dflash_draft import (
-                ReducedVocabularyDFlashWorker,
-                materialize_draft_checkpoint,
+                dflash_verify_width,
+                prepare_dflash_worker,
             )
 
             # note (wilsonzheng0327): SGLang reads the draft config while resolving
             # the server args, so the flat copy must exist before that.
-            self.draft_checkpoint = materialize_draft_checkpoint(
-                str(draft_model_path), overrides.get("speculative_draft_model_revision")
+            self.draft_checkpoint, self.speculative_worker_class = (
+                prepare_dflash_worker(overrides)
             )
-            overrides["speculative_draft_model_path"] = self.draft_checkpoint.name
-            overrides["speculative_draft_model_revision"] = None
-            self.speculative_worker_class = ReducedVocabularyDFlashWorker
             # note (wilsonzheng0327): async decode under a draft means speculative
             # overlap, which this runner has not opted into.
             self.enable_async_decode = False
             # note (wilsonzheng0327): on SGLang 0.5.23 the compiled path makes the draft half as fast as no draft at concurrency 1, while without a draft it still speeds up concurrency 1 by about 17%.
             overrides["enable_torch_compile"] = False
-            dflash_block_size = overrides.get("speculative_dflash_block_size")
-            num_draft_tokens = overrides.get("speculative_num_draft_tokens")
-            # note (wilsonzheng0327): SGLang verifies speculative_dflash_block_size tokens per step, else speculative_num_draft_tokens, else the draft's block size.
-            if dflash_block_size is not None:
-                draft_width = int(dflash_block_size)
-            elif num_draft_tokens is not None:
-                draft_width = int(num_draft_tokens)
-            else:
-                with open(
-                    os.path.join(self.draft_checkpoint.name, "config.json")
-                ) as config_file:
-                    draft_width = int(
-                        json.load(config_file)["dflash_config"]["block_size"]
-                    )
-            # note (wilsonzheng0327): the context fits a 30 s clip and the full budget
-            # exactly, and a draft request must stay two verify widths below the context.
-            self.speculative_reserve_tokens = 2 * draft_width
+            self.speculative_reserve_tokens = 2 * dflash_verify_width(overrides)
             self.engine_context_padding = self.speculative_reserve_tokens + 1
             self.context_length += self.engine_context_padding
 

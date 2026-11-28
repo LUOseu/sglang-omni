@@ -93,7 +93,7 @@ A value the factory does not accept is an error at stage construction, not a
 silent no-op.
 
 `engine.disable_speculative_decoding: true` never reaches SGLang. It drops
-every `speculative_*` key from the stage's `engine.*` block, whether the
+every `speculative_*` key and `enable_linear_replayssm_spec` from the stage's `engine.*` block, whether the
 model's defaults, a config file or the CLI set it, so one setting turns off
 the stage's draft.
 

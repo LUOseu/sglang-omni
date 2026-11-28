@@ -12,7 +12,17 @@ from sglang.srt.arg_groups.model_override_base import (
     attention_backends_of,
     resolved_view,
 )
-from sglang.srt.runtime_context import get_context, get_schedule
+from sglang.srt.configs.hybrid_arch import hybrid_kda_config
+from sglang.srt.layers.attention.linear.utils import (
+    LinearAttnKernelBackend,
+    resolve_linear_attn_backends,
+)
+from sglang.srt.runtime_context import (
+    get_context,
+    get_exec,
+    get_schedule,
+    max_speculative_num_draft_tokens,
+)
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from typing_extensions import Unpack
 
@@ -24,6 +34,7 @@ if TYPE_CHECKING:
 else:
     pass
 
+from sglang_omni.speculative.algorithm import validate_kda_replayssm_window
 from sglang_omni.utils.gpu_compat import (
     get_visible_gpu_sm_version,
     gpu_architecture_for_sm,
@@ -213,6 +224,30 @@ def create_sglang_infrastructure(
             "stage does not support speculative decoding"
         )
     else:
+        if (
+            get_exec().mamba.enable_linear_replayssm_spec
+            and hybrid_kda_config(model_worker.model_config) is not None
+        ):
+            verify_backend = resolve_linear_attn_backends().verify
+            if verify_backend not in (
+                LinearAttnKernelBackend.TRITON,
+                LinearAttnKernelBackend.NV_CUTEDSL,
+            ):
+                raise ValueError(
+                    f"KDA ReplaySSM requires a ring-writing verify backend; got {verify_backend.value!r}. "
+                    "Set linear_attn_verify_backend to triton or nv_cutedsl."
+                )
+            else:
+                pass
+            verify_width = max_speculative_num_draft_tokens()
+            if verify_width is not None:
+                validate_kda_replayssm_window(
+                    get_exec().mamba.linear_replayssm_cache_len, verify_width
+                )
+            else:
+                pass
+        else:
+            pass
         if speculative_algorithm.is_dspark():
             # note (wilsonzheng0327): SGLang's FA3 backend imports sgl_kernel, which
             # an MPS or CPU install lacks, so only a DSpark build loads the shim.

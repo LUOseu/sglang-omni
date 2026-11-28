@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
+from sglang.srt.configs.kimi_linear import KimiLinearConfig
 from sglang.srt.runtime_context import get_context
 
 from sglang_omni.model_runner import model_worker as model_worker_module
@@ -193,6 +194,48 @@ def test_a_stage_that_does_not_opt_in_refuses_a_draft(monkeypatch, published) ->
             speculative_worker_class=lambda **kwargs: built_drafts.append(kwargs),
         )
     assert built_drafts == []
+
+
+@pytest.mark.parametrize(
+    ("ring_length", "verify_backend", "decode_backend", "error"),
+    [
+        (8, "triton", "triton", "linear_replayssm_cache_len.*8.*15"),
+        (32, "flashinfer", "triton", "ReplaySSM.*verify.*flashinfer"),
+        (32, None, "flashinfer", "ReplaySSM.*verify.*flashinfer"),
+    ],
+)
+def test_kda_replayssm_checks_the_resolved_settings_before_building_the_draft(
+    monkeypatch, published, ring_length, verify_backend, decode_backend, error
+) -> None:
+    class Worker:
+        def __init__(self, **kwargs):
+            published.append(
+                get_context().override_server_args(
+                    speculative_algorithm="EAGLE",
+                    speculative_num_draft_tokens=15,
+                    enable_linear_replayssm_spec=True,
+                    linear_replayssm_cache_len=ring_length,
+                    linear_attn_verify_backend=verify_backend,
+                    linear_attn_decode_backend=decode_backend,
+                )
+            )
+            published[-1].install()
+            self.model_runner = SimpleNamespace()
+            self.model_config = SimpleNamespace(
+                hf_config=KimiLinearConfig(), is_draft_model=False
+            )
+
+    monkeypatch.setattr(model_worker_module, "ModelWorker", Worker)
+    monkeypatch.setattr(
+        bootstrap, "describe_sglang_runtime_configuration", lambda *args: ""
+    )
+    args = SimpleNamespace(
+        speculative_algorithm="EAGLE", disable_overlap_schedule=False
+    )
+    with pytest.raises(ValueError, match=error):
+        bootstrap.create_sglang_infrastructure(
+            args, 0, supports_speculative_decoding=True
+        )
 
 
 def test_before_memory_pool_runs_after_the_weights_and_before_the_pool(

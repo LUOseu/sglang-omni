@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import torch
 import torch.nn.functional as F
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from transformers import AutoConfig
 
 from sglang_omni.models.qwen3_omni.bootstrap import create_thinker_scheduler
@@ -54,9 +53,11 @@ from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestDa
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.scheduling.stage_cache import StageOutputCache
 from sglang_omni.scheduling.threaded_simple_scheduler import ThreadedSimpleScheduler
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 from sglang_omni.utils.cpu import automatic_video_decode_threads
 from sglang_omni.utils.gpu_memory import format_bytes_gib, get_process_gpu_memory_bytes
 from sglang_omni.utils.misc import avail_gpu_mem
+from sglang_omni.vendor.sglang.hf_transformers import dspine_context_length
 
 if TYPE_CHECKING:
 
@@ -1290,7 +1291,7 @@ def create_sglang_thinker_executor_from_config(
     else:
         pass
     draft_model_path = overrides.get("speculative_draft_model_path")
-    speculative_algorithm = SpeculativeAlgorithm.from_string(
+    speculative_algorithm = resolve_speculative_algorithm(
         overrides.get("speculative_algorithm")
     )
     if speculative_algorithm.is_none():
@@ -1303,7 +1304,7 @@ def create_sglang_thinker_executor_from_config(
     else:
         if not (speculative_algorithm.is_dflash() or speculative_algorithm.is_eagle3()):
             raise ValueError(
-                "Qwen3-Omni speculative thinker decoding supports DFLASH and EAGLE3, "
+                "Qwen3-Omni speculative thinker decoding supports DFLASH, DSPINE and EAGLE3, "
                 f"not {speculative_algorithm.name}"
             )
         elif draft_model_path is None:
@@ -1332,12 +1333,17 @@ def create_sglang_thinker_executor_from_config(
         # note (wilsonzheng0327): the draft verifies whole blocks, so mixed prefill/decode batches stay disabled.
         overrides["enable_mixed_chunk"] = False
         # The draft has its own positional capacity; the target serves within it.
-        draft_context_length = int(
-            AutoConfig.from_pretrained(
-                draft_model_path,
-                revision=overrides.get("speculative_draft_model_revision"),
-            ).max_position_embeddings
-        )
+        draft_revision = overrides.get("speculative_draft_model_revision")
+        if str(overrides["speculative_algorithm"]).upper() == "DSPINE":
+            draft_context_length = dspine_context_length(
+                draft_model_path, draft_revision
+            )
+        else:
+            draft_context_length = int(
+                AutoConfig.from_pretrained(
+                    draft_model_path, revision=draft_revision
+                ).max_position_embeddings
+            )
         if max_seq_len is not None and max_seq_len > draft_context_length:
             raise ValueError(
                 f"max_seq_len={max_seq_len} exceeds the draft's "

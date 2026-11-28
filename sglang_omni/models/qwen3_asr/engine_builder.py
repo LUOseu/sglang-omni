@@ -49,10 +49,13 @@ from sglang_omni.scheduling.generation_batch_policy import (
 )
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.scheduling.types import DeferredAdmission
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
 from sglang_omni.utils.gpu_memory import format_bytes_gib, get_process_gpu_memory_bytes
 
 if TYPE_CHECKING:
+    from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
+
     from sglang_omni.models.qwen3_asr.sglang_model import (
         Qwen3ASRForConditionalGeneration,
     )
@@ -135,6 +138,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
             pass
         self.max_running_requests = max_running_requests
         self.draft_checkpoint: TemporaryDirectory[str] | None = None
+        self.speculative_worker_class: type[BaseSpecWorker] | None = None
         self.max_new_tokens = max_new_tokens
         self.enable_async_decode = enable_async_decode
         self.enable_plain_fallback = enable_plain_fallback
@@ -391,9 +395,9 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
         algorithm = overrides.get("speculative_algorithm")
         if algorithm is None:
             pass
-        elif algorithm != "DFLASH":
+        elif str(algorithm).upper() not in ("DFLASH", "DSPINE"):
             raise ValueError(
-                "Qwen3-ASR speculative decoding currently supports DFLASH only"
+                "Qwen3-ASR speculative decoding currently supports DFLASH or DSPINE"
             )
         elif (
             not (current_platform.is_cuda() or current_platform.is_npu())
@@ -404,9 +408,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
             )
         else:
             # note (WilsonZheng0327): Draft modules import Triton kernels unavailable on Torch MPS hosts.
-            from sglang_omni.speculative.dflash_draft import (
-                materialize_draft_checkpoint,
-            )
+            from sglang_omni.speculative.dflash_draft import prepare_dflash_worker
 
             draft_model_path = overrides.get("speculative_draft_model_path")
             draft_revision = overrides.get("speculative_draft_model_revision")
@@ -418,11 +420,10 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
                 raise ValueError("speculative_draft_model_revision must be a string")
             else:
                 pass
-            self.draft_checkpoint = materialize_draft_checkpoint(
-                draft_model_path, draft_revision, allow_non_causal=True
+            resolve_speculative_algorithm(algorithm)
+            self.draft_checkpoint, self.speculative_worker_class = (
+                prepare_dflash_worker(overrides, allow_non_causal=True)
             )
-            overrides["speculative_draft_model_path"] = self.draft_checkpoint.name
-            overrides["speculative_draft_model_revision"] = None
             # note (wilsonzheng0327): async decode under a draft is speculative overlap, which SGLang turns on through its overlap scheduler.
             overrides["disable_overlap_schedule"] = not self.enable_async_decode
             overrides["enable_mixed_chunk"] = False
@@ -466,18 +467,14 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
         self.context_length = int(server_args.context_length)
 
     def infra_kwargs(self) -> InfrastructureOptions:
-        if self.draft_checkpoint is None:
+        if self.speculative_worker_class is None:
             return {}
         else:
-            # note (WilsonZheng0327): Draft modules import Triton kernels unavailable on Torch MPS hosts.
-            from sglang_omni.speculative.dflash_draft import (
-                ReducedVocabularyDFlashWorker,
-            )
 
             # note (wilsonzheng0327): the worker is built for overlap or for the synchronous verify loop, so the choice must reach it at construction.
             return {
                 "supports_speculative_decoding": True,
-                "speculative_worker_class": ReducedVocabularyDFlashWorker,
+                "speculative_worker_class": self.speculative_worker_class,
                 "enable_async_decode": self.enable_async_decode,
             }
 
@@ -564,7 +561,9 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
             should_wait_for_encode=self.should_wait_for_encode,
             # NPU DFlash verification uses argmax and cannot preserve sampling.
             greedy_only=self.uses_torch_mps()
-            or (current_platform.is_npu() and self.draft_checkpoint is not None),
+            or (
+                current_platform.is_npu() and self.speculative_worker_class is not None
+            ),
         )
 
     def make_abort_callback(self) -> Callable[[str], None] | None:
@@ -608,7 +607,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
             ),
             # note (wilsonzheng0327): with a draft a lone request decodes synchronously, because overlap made its first streamed text about 20% (2 ms) later than without a draft, while larger batches keep overlap.
             "async_decode_min_batch_size": (
-                (1 if self.draft_checkpoint is None else 2)
+                (1 if self.speculative_worker_class is None else 2)
                 if self.async_decode_min_batch_size is None
                 else self.async_decode_min_batch_size
             ),
@@ -617,7 +616,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
                 current_platform.is_cuda()
                 or (current_platform.is_xpu() and self.enable_async_decode)
             )
-            and self.draft_checkpoint is None,
+            and self.speculative_worker_class is None,
             "request_build_max_workers": (
                 1 if use_torch_mps else self.request_build_max_workers
             ),
@@ -632,7 +631,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder[Qwen3ASRRequestData]):
             ),
             # note (ychu824): with a draft this defaults to off, because holding prefills during decode delayed the first text and did not raise throughput.
             "prefill_coalesce_after_builds_during_decode": (
-                self.draft_checkpoint is None
+                self.speculative_worker_class is None
                 if self.prefill_coalesce_after_builds_during_decode is None
                 else self.prefill_coalesce_after_builds_during_decode
             ),

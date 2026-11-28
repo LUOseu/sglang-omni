@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import torch
@@ -23,6 +24,7 @@ from sglang.srt.runtime_context import get_exec
 from sglang.srt.speculative.dflash_worker_v2 import DFlashWorkerV2
 from torch import nn
 from transformers import Qwen3Config
+from transformers.utils import cached_file
 
 DRAFT_ARCHITECTURE = "ReducedVocabularyDFlashDraftModel"
 SELECTOR_DRAFT_ARCHITECTURE = "DFlash2DraftModel"
@@ -117,6 +119,62 @@ def draft_worker_class(draft_checkpoint_dir: str) -> type[DFlashWorkerV2]:
         return DFlashWorkerV2
     else:
         return ReducedVocabularyDFlashWorker
+
+
+def prepare_dflash_worker(
+    overrides: dict[str, object],
+    *,
+    allow_non_causal: bool = False,
+    supports_selector: bool = False,
+) -> tuple[TemporaryDirectory[str] | None, type[DFlashWorkerV2]]:
+    """Leave native DSpine checkpoints to SGLang and adapt Omni's speculators drafts."""
+    name = str(overrides.get("speculative_algorithm") or "DFLASH").upper()
+    path = overrides.get("speculative_draft_model_path")
+    if not isinstance(path, str) or not path:
+        raise ValueError(
+            f"speculative_algorithm {name} needs speculative_draft_model_path"
+        )
+    elif name == "DSPINE":
+        # SGLang resolves this alias after checking the draft's architecture and revision.
+        overrides["speculative_algorithm"] = name
+        return None, DFlashWorkerV2
+    else:
+        revision = overrides.get("speculative_draft_model_revision")
+        checkpoint = materialize_draft_checkpoint(
+            path,
+            None if revision is None else str(revision),
+            allow_non_causal=allow_non_causal,
+        )
+        overrides.update(
+            speculative_draft_model_path=checkpoint.name,
+            speculative_draft_model_revision=None,
+        )
+        worker = (
+            draft_worker_class(checkpoint.name)
+            if supports_selector
+            else ReducedVocabularyDFlashWorker
+        )
+        return checkpoint, worker
+
+
+def dflash_verify_width(overrides: dict[str, object]) -> int:
+    """Read the effective verify width, including the anchor row."""
+    for key in ("speculative_dflash_block_size", "speculative_num_draft_tokens"):
+        if overrides.get(key) is not None:
+            return int(overrides[key])
+        else:
+            pass
+    revision = overrides.get("speculative_draft_model_revision")
+    config_file = cached_file(
+        str(overrides["speculative_draft_model_path"]), "config.json", revision=revision
+    )
+    config = json.loads(Path(config_file).read_text())
+    dflash_config = config.get("dflash_config") or {}
+    return int(
+        dflash_config["block_size"]
+        if "block_size" in dflash_config
+        else config["block_size"]
+    )
 
 
 class ReducedVocabularyDFlashDraftModel(DFlashDraftModel):

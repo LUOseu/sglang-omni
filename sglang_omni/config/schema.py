@@ -166,6 +166,8 @@ class EngineArgs(BaseModel):
     max_total_tokens: int | None = Field(default=None, ge=1)
     cuda_graph_max_bs: int | None = Field(default=None, ge=1)
     disable_cuda_graph: bool | None = None
+    enable_linear_replayssm_spec: bool | None = None
+    linear_replayssm_cache_len: int | None = Field(default=None, ge=1)
     enable_torch_compile: bool | None = None
     torch_compile_max_bs: int | None = Field(default=None, ge=1)
     cpu_offload_gb: int | None = Field(default=None, ge=0)
@@ -177,7 +179,7 @@ class EngineArgs(BaseModel):
     )
     disable_speculative_decoding: bool | None = Field(
         default=None,
-        description="When true, every speculative_* key in this block is left out of server_args_overrides, so the stage runs without the draft set by the model defaults or a config file. Never forwarded to SGLang ServerArgs.",
+        description="When true, every speculative_* key and enable_linear_replayssm_spec in this block are left out of server_args_overrides, so the stage runs without the draft set by the model defaults or a config file. Never forwarded to SGLang ServerArgs.",
     )
     NON_SERVER_KEYS: ClassVar[frozenset[str]] = frozenset(
         {"kv_cache_bytes", "disable_speculative_decoding"}
@@ -212,7 +214,7 @@ class EngineArgs(BaseModel):
         A declared key left at ``None`` means "not set" and is omitted, so
         SGLang's own defaults stay in charge; free-form keys are always
         included because writing one is itself the intent. With
-        disable_speculative_decoding set, the speculative_* keys are left out
+        disable_speculative_decoding set, speculative_* keys and the spec-verify ring flag are left out
         whichever source wrote them. A separate draft pinned in the draft registry gets
         its pinned revision when this block has no speculative_draft_model_revision
         key, so a revision the block sets, None included, still wins.
@@ -224,7 +226,11 @@ class EngineArgs(BaseModel):
             if (value is not None or key in extra)
             and key not in self.NON_SERVER_KEYS
             and not (
-                self.disable_speculative_decoding and key.startswith("speculative_")
+                self.disable_speculative_decoding
+                and (
+                    key.startswith("speculative_")
+                    or key == "enable_linear_replayssm_spec"
+                )
             )
         }
         draft_model_path = overrides.get("speculative_draft_model_path")

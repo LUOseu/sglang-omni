@@ -26,13 +26,13 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
 from dataclasses import dataclass
 from functools import partial
+from importlib.util import find_spec
 from itertools import islice
 from typing import Callable, Generic, Literal
 
 import sglang.srt.runtime_context as runtime_context
 import torch
 from sglang.srt.configs.model_config import ModelConfig
-from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import get_dp_tp_group
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
@@ -48,11 +48,17 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.managers.schedule_policy import PrefillAdder
 from sglang.srt.managers.scheduler import (
-    PAUSE_WINDOWS_MAX,
     TEST_RETRACT,
     TEST_RETRACT_NO_PREFILL_BS,
+    DisaggregationMode,
     GenerationBatchResult,
 )
+
+if find_spec("sglang.srt.managers.scheduler_components.pause_state") is None:
+    from sglang.srt.managers.scheduler import PAUSE_WINDOWS_MAX
+else:
+    from sglang.srt.managers.scheduler_components.pause_state import PAUSE_WINDOWS_MAX
+
 from sglang.srt.managers.scheduler import Scheduler as _Upstream
 from sglang.srt.managers.scheduler import validate_input_length
 from sglang.srt.managers.utils import allocate_distinct_stream
@@ -883,8 +889,6 @@ class OmniScheduler(Generic[RequestDataT]):
         self.prefill_end_done: set[str] = set()
 
     def initial_disaggregation_mode(self) -> DisaggregationMode:
-        from sglang.srt.disaggregation.utils import DisaggregationMode
-
         return DisaggregationMode.NULL
 
     def bind_model_runner(self, model_runner: ModelRunner[RequestDataT]) -> None:

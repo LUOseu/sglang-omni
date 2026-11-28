@@ -84,6 +84,38 @@ Usage notes:
 - SeedTTS English WER is 1.227% and Chinese CER 0.747% with the draft, against 1.219% and 0.741% without it. One at a time, MTP output is identical to the server without a draft; the draft's is identical on 81 of 84 held-out transcripts and differs more on long answers. At 8 at a time, both agree with the server without a draft on 263-264 of 280 transcripts, because greedy decoding on this thinker depends on the batch.
 - The draft decodes synchronously. Keep `repetition_penalty=1`. The draft rejects a request `seed` when sampling; greedy and one-token requests still accept a seed. Standalone speech synthesis is unaffected.
 
+### Compare ReplaySSM memory and transcription on two GPUs
+
+The Ming thinker uses `--thinker.engine.enable_linear_replayssm_spec` for speculative verification. Its KDA ring length is `--thinker.engine.linear_replayssm_cache_len` in SGLang 0.5.23. A DFlash block of 16 contains the anchor and 15 proposed tokens. The default ring has 32 slots to leave room for additional verify rows. An explicit KDA ring must be a power of two and at least twice the maximum verify width, including when the draft count is adaptive. Select a ring-writing verify backend (`triton` or `nv_cutedsl`). Ming disables the radix cache for its audio prefixes. CUDA Graph capture can stay enabled. Speculative verification uses the upstream commit path and leaves the decode-only ReplaySSM write cursor inactive.
+
+Use two GPUs that fit the BF16 thinker at TP2, such as two H200s. Start a fresh server for each arm. Set `replay=false` for the baseline and `replay=true` for the ring. Keep the model, draft, running cap and input order identical.
+
+```bash
+replay=false
+cap=8
+mkdir -p results/ming3-replayssm
+CUDA_VISIBLE_DEVICES=0,1 SGLANG_RAGGED_VERIFY_MODE=static sgl-omni serve \
+  --config examples/configs/ming3_audio_dflash_replayssm_tp2.yaml --port 8000 \
+  --thinker.engine.max_running_requests "$cap" \
+  --thinker.engine.enable_linear_replayssm_spec "$replay" \
+  2>&1 | tee "results/ming3-replayssm/server-$replay-c$cap.log"
+```
+
+Once the server is ready, run the client in another shell with matching `replay` and `cap` values. Run both arms at cap 8 first, then repeat at cap 16 or 32 to test higher concurrency. Compare per-rank intermediate SSM bytes and KV token capacity in the startup logs. The ring consumes memory of its own. For WER, compare `corpus_wer` at the same concurrency across repeats and check that both arms evaluated the full corpus with zero failures.
+
+```bash
+replay=false
+cap=8
+python -m benchmarks.eval.benchmark_asr_seedtts \
+  --model-path inclusionAI/Ming-3.0-audio-flash --port 8000 --lang en \
+  --concurrencies "1,$cap" --repeats 3 --warmup \
+  --output "results/ming3-replayssm/wer-$replay-c$cap.json"
+grep -Ei 'intermediate_ssm_state_cache|ReplaySSM ring buffers allocated|KV Cache is allocated' \
+  "results/ming3-replayssm/server-$replay-c$cap.log"
+```
+
+`DSPINE` selects the native DFlash worker on an SGLang build with DSpine support. It needs a full-vocabulary DSpine checkpoint trained for the target. Omni forwards the checkpoint and its revision for upstream validation. The repository pin 0.5.23 has no DSpine implementation. The proposed upstream backend supports TP=DP=PP=1, so the two-GPU Ming recipe uses its published DFlash draft. [Upstream DSpine implementation](https://github.com/sgl-project/sglang/pull/47359)
+
 ## Transcription
 
 ```bash

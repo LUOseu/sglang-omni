@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,8 +15,8 @@ from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.models.registry import ModelRegistry
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
+from sglang.srt.speculative.dflash_worker_v2 import DFlashWorkerV2
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
-from sglang.srt.utils.hf_transformers.tokenizer import get_tokenizer
 from transformers import AutoConfig
 
 from sglang_omni.models.ming3_audio.preprocessing import (
@@ -44,13 +45,21 @@ from sglang_omni.scheduling.sglang_backend.server_args_builder import (
     build_sglang_server_args,
 )
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+from sglang_omni.speculative.algorithm import (
+    resolve_speculative_algorithm,
+    validate_kda_replayssm_window,
+)
 from sglang_omni.speculative.dflash_draft import (
     ReducedVocabularyDFlashWorker,
-    materialize_draft_checkpoint,
+    dflash_verify_width,
+    prepare_dflash_worker,
 )
 from sglang_omni.utils.audio import decode_audio_data_uri
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.device import resolve_concrete_device
+from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
+
+logger = logging.getLogger(__name__)
 
 
 def create_decode_executor(model_path: str) -> SimpleScheduler:
@@ -159,45 +168,26 @@ def create_audio_encoder_executor(
 
 def prepare_draft_checkpoint(
     overrides: dict[str, JsonValue],
-) -> TemporaryDirectory[str]:
-    """Point the engine at a loadable copy of a DFlash draft; the caller removes it once loaded."""
-    draft_model_path = overrides.get("speculative_draft_model_path")
-    if not isinstance(draft_model_path, str) or not draft_model_path:
-        raise ValueError(
-            "speculative_algorithm DFLASH needs speculative_draft_model_path"
-        )
-    else:
-        pass
-    revision = overrides.get("speculative_draft_model_revision")
-    draft_checkpoint = materialize_draft_checkpoint(
-        draft_model_path, None if revision is None else str(revision)
-    )
-    # note (evanderfff123-boop): fold accepted KDA inputs from a power-of-two ring covering twice the draft block instead of keeping per-draft-token state snapshots.
-    if overrides.setdefault("enable_linear_replayssm_spec", True):
-        dflash_block_size = overrides.get("speculative_dflash_block_size")
-        num_draft_tokens = overrides.get("speculative_num_draft_tokens")
-        # note (evanderfff123-boop): SGLang verifies speculative_dflash_block_size tokens per step, else speculative_num_draft_tokens, else the draft's block size.
-        if dflash_block_size is not None:
-            draft_width = int(dflash_block_size)
-        elif num_draft_tokens is not None:
-            draft_width = int(num_draft_tokens)
-        else:
-            draft_config = json.loads(
-                (Path(draft_checkpoint.name) / "config.json").read_text()
+) -> TemporaryDirectory[str] | None:
+    """Configure KDA verify and prepare a local copy only for the reduced-vocabulary draft."""
+    checkpoint, _ = prepare_dflash_worker(overrides)
+    try:
+        if overrides.setdefault("enable_linear_replayssm_spec", True):
+            width = dflash_verify_width(overrides)
+            ring = overrides.setdefault(
+                "linear_replayssm_cache_len", 1 << (2 * width - 1).bit_length()
             )
-            draft_width = int(draft_config["dflash_config"]["block_size"])
-        overrides.setdefault(
-            "linear_replayssm_cache_len", 2 ** (2 * draft_width - 1).bit_length()
-        )
-    else:
-        pass
-    overrides.update(
-        speculative_draft_model_path=draft_checkpoint.name,
-        speculative_draft_model_revision=None,
-        disable_overlap_schedule=True,
-        enable_mixed_chunk=False,
-    )
-    return draft_checkpoint
+            validate_kda_replayssm_window(int(ring), width)
+        else:
+            pass
+    except Exception:
+        if checkpoint is not None:
+            checkpoint.cleanup()
+        else:
+            pass
+        raise
+    overrides.update(disable_overlap_schedule=True, enable_mixed_chunk=False)
+    return checkpoint
 
 
 def create_thinker_executor(
@@ -218,7 +208,7 @@ def create_thinker_executor(
     AutoConfig.register(Ming3AudioConfig.model_type, Ming3AudioConfig, exist_ok=True)
     ModelRegistry.models["BailingMoeV3ForCausalLM"] = Ming3AudioThinker
     overrides = dict(server_args_overrides or {})
-    speculative_algorithm = SpeculativeAlgorithm.from_string(
+    speculative_algorithm = resolve_speculative_algorithm(
         overrides.get("speculative_algorithm")
     )
     model_overrides: dict[str, JsonValue] = {
@@ -233,13 +223,17 @@ def create_thinker_executor(
             pass
     elif speculative_algorithm.is_dflash():
         draft_checkpoint = prepare_draft_checkpoint(overrides)
-        speculative_worker_class = ReducedVocabularyDFlashWorker
+        speculative_worker_class = (
+            ReducedVocabularyDFlashWorker
+            if draft_checkpoint is not None
+            else DFlashWorkerV2
+        )
         # note (wilsonzheng0327): SGLang also applies json_model_override_args to the draft's
         # config, so the thinker's architecture comes from Ming3AudioConfig instead.
         model_overrides = {}
     elif speculative_algorithm != SpeculativeAlgorithm.EAGLE:
         raise ValueError(
-            "Ming3 audio supports NEXTN (EAGLE) with its bundled MTP, or a DFLASH draft"
+            "Ming3 audio supports NEXTN (EAGLE) with its bundled MTP, or a DFLASH or DSPINE draft"
         )
     else:
         if overrides.get("speculative_draft_model_path") not in (None, model_path):
@@ -282,6 +276,15 @@ def create_thinker_executor(
             enable_mixed_chunk=False,
         )
         ModelRegistry.models["BailingMoeForCausalLMNextN"] = Ming3AudioMTP
+    if (
+        overrides.get("enable_linear_replayssm_spec")
+        and overrides.get("disable_radix_cache") is False
+    ):
+        logger.warning(
+            "Ming3 audio disables prefix caching for this thinker; using disable_radix_cache=True with ReplaySSM."
+        )
+    else:
+        pass
     overrides.update(
         tp_size=tp_size,
         trust_remote_code=False,

@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
@@ -14,7 +12,6 @@ from sglang.srt.arg_groups.model_override_base import resolved_view
 from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from transformers import (
     AutoConfig,
     AutoTokenizer,
@@ -40,9 +37,10 @@ from sglang_omni.scheduling.engine_factory import (
 )
 from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
 from sglang_omni.scheduling.types import DeferredAdmission
+from sglang_omni.speculative.algorithm import resolve_speculative_algorithm
 from sglang_omni.speculative.dflash_draft import (
-    ReducedVocabularyDFlashWorker,
-    materialize_draft_checkpoint,
+    dflash_verify_width,
+    prepare_dflash_worker,
 )
 from sglang_omni.utils import checkpoint
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
@@ -225,7 +223,7 @@ class ArkasrEngineBuilder(AsrEngineBuilder[ArkASRRequestData]):
             pass
 
         draft_model_path = overrides.get("speculative_draft_model_path")
-        speculative_algorithm = SpeculativeAlgorithm.from_string(
+        speculative_algorithm = resolve_speculative_algorithm(
             overrides.get("speculative_algorithm")
         )
         if speculative_algorithm.is_none():
@@ -241,7 +239,7 @@ class ArkasrEngineBuilder(AsrEngineBuilder[ArkASRRequestData]):
                 pass
         elif not speculative_algorithm.is_dflash():
             raise ValueError(
-                f"{self.model_name} speculative decoding supports DFLASH, "
+                f"{self.model_name} speculative decoding supports DFLASH or DSPINE, "
                 f"not {speculative_algorithm.name}"
             )
         elif draft_model_path is None:
@@ -251,12 +249,9 @@ class ArkasrEngineBuilder(AsrEngineBuilder[ArkASRRequestData]):
         elif not current_platform.is_cuda():
             raise ValueError(f"{self.model_name} DFLASH needs a CUDA GPU")
         else:
-            self.draft_checkpoint = materialize_draft_checkpoint(
-                str(draft_model_path), overrides.get("speculative_draft_model_revision")
+            self.draft_checkpoint, self.speculative_worker_class = (
+                prepare_dflash_worker(overrides)
             )
-            overrides["speculative_draft_model_path"] = self.draft_checkpoint.name
-            overrides["speculative_draft_model_revision"] = None
-            self.speculative_worker_class = ReducedVocabularyDFlashWorker
             # note (wilsonzheng0327): async decode under a draft means speculative overlap, so it stays off unless the operator asks for it.
             if self.enable_async_decode is None:
                 self.enable_async_decode = False
@@ -266,16 +261,7 @@ class ArkasrEngineBuilder(AsrEngineBuilder[ArkASRRequestData]):
             # note (wilsonzheng0327): on SGLang 0.5.23 the compiled path makes each DFlash verify step several times slower (no gain at c1 despite 6.8 accepted tokens), while decode without a draft still gains from it.
             overrides["enable_torch_compile"] = False
             if not has_context_length_override:
-                draft_config = json.loads(
-                    (Path(self.draft_checkpoint.name) / "config.json").read_text()
-                )
-                draft_tokens = overrides.get("speculative_num_draft_tokens")
-                if draft_tokens is None:
-                    draft_tokens = draft_config["dflash_config"]["block_size"]
-                else:
-                    pass
-                # note (Ruilin Gao): verification reserves two effective draft blocks.
-                self.context_length += 2 * int(draft_tokens)
+                self.context_length += 2 * dflash_verify_width(overrides)
             else:
                 pass
 

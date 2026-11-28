@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeAlias
 import torch
 from sglang.srt.beam_search.logits_capture import capture_pre_sample_logits
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
-from sglang.srt.utils.common import async_h2d, is_pin_memory_available
+from sglang.srt.utils import async_h2d, is_pin_memory_available
 
 from sglang_omni.model_runner.model_worker import ModelWorker
 from sglang_omni.model_runner.prefill_inputs import (
