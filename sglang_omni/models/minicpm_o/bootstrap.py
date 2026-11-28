@@ -45,7 +45,6 @@ def create_talker_scheduler(
 ) -> OmniScheduler[SGLangARRequestData]:
     """Create a codec scheduler with per-request condition embeddings."""
     from sglang.srt.arg_groups.model_override_base import resolved_view
-    from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
     from sglang_omni.models.minicpm_o.talker_model_runner import (
         MiniCPMOTalkerModelRunner,
@@ -67,6 +66,7 @@ def create_talker_scheduler(
         SGLangOutputProcessor,
     )
     from sglang_omni.utils import cuda_graph_batch_validator
+    from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
     from sglang_omni.vendor.sglang.server_args import override_server_args
 
     want_cuda_graph = not bool(resolved_view(server_args).disable_cuda_graph)
@@ -162,7 +162,6 @@ def create_thinker_scheduler(
 ) -> OmniScheduler[SGLangARRequestData]:
     """Create a thinker scheduler with optional hidden-state capture for speech."""
     from sglang.srt.arg_groups.model_override_base import resolved_view
-    from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
     from sglang_omni.models.minicpm_o.request_builders import (
         build_thinker_stream_output,
@@ -180,6 +179,7 @@ def create_thinker_scheduler(
     from sglang_omni.scheduling.sglang_backend.output_processor import (
         SGLangOutputProcessor,
     )
+    from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
     from sglang_omni.vendor.sglang.server_args import override_server_args
 
     cfg = resolved_view(server_args)

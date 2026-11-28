@@ -16,8 +16,7 @@ from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.runtime_context import get_context, get_schedule
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import add_prefix
-from sglang.srt.utils.common import async_h2d
+from sglang.srt.utils import add_prefix, async_h2d
 from torch import nn
 
 from sglang_omni.models.qwen3_omni.components.thinker_model import (

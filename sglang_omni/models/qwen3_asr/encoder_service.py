@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeGuard
 
 import torch
-from sglang.srt.managers.schedule_batch import MultimodalDataItem, MultimodalInputFormat
+from sglang.srt.managers.schedule_batch import MultimodalDataItem
+from sglang.srt.multimodal.modality import MultimodalInputFormat
 from sglang.srt.utils import create_device_stream, device_stream_context
 from transformers import WhisperFeatureExtractor
 

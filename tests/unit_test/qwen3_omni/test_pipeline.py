@@ -1243,7 +1243,6 @@ def test_qwen_thinker_cuda_graph_capture_lifecycle(
     has_draft: bool,
 ) -> None:
     from sglang.srt.arg_groups import model_override_base
-    from sglang.srt.utils import hf_transformers_utils
 
     from sglang_omni.model_runner import thinker_model_runner
     from sglang_omni.models.qwen3_omni import bootstrap, request_builders
@@ -1253,6 +1252,7 @@ def test_qwen_thinker_cuda_graph_capture_lifecycle(
     from sglang_omni.scheduling import bootstrap as scheduling_bootstrap
     from sglang_omni.scheduling import omni_scheduler, sglang_backend
     from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
+    from sglang_omni.vendor.sglang import hf_transformers as hf_transformers_utils
     from sglang_omni.vendor.sglang import server_args as server_args_module
 
     server_args = SimpleNamespace(
@@ -1456,7 +1456,6 @@ def test_qwen_thinker_enables_and_attests_breakable_prefill_graphs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from sglang.srt.arg_groups import model_override_base
-    from sglang.srt.utils import hf_transformers_utils
 
     from sglang_omni.models.qwen3_omni import bootstrap, request_builders
     from sglang_omni.models.qwen3_omni import (
@@ -1466,6 +1465,7 @@ def test_qwen_thinker_enables_and_attests_breakable_prefill_graphs(
     from sglang_omni.scheduling import omni_scheduler, sglang_backend
     from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
     from sglang_omni.utils import cuda_graph_batch_validator
+    from sglang_omni.vendor.sglang import hf_transformers as hf_transformers_utils
     from sglang_omni.vendor.sglang import server_args as server_args_module
 
     server_args = SimpleNamespace(
@@ -1581,8 +1581,6 @@ def test_qwen_thinker_enables_and_attests_breakable_prefill_graphs(
 def test_qwen_talker_enables_and_attests_breakable_prefill_graphs(
     monkeypatch: pytest.MonkeyPatch, prefill_backend: str, execution_mode: str
 ) -> None:
-    from sglang.srt.utils import hf_transformers_utils
-
     from sglang_omni.models.qwen3_omni import (
         bootstrap,
         request_builders,
@@ -1593,6 +1591,7 @@ def test_qwen_talker_enables_and_attests_breakable_prefill_graphs(
     from sglang_omni.scheduling import sglang_backend
     from sglang_omni.scheduling.generation_batch_policy import CudaGraphBackend
     from sglang_omni.utils import cuda_graph_batch_validator
+    from sglang_omni.vendor.sglang import hf_transformers as hf_transformers_utils
 
     server_args = SimpleNamespace(
         enable_streaming_session=True,

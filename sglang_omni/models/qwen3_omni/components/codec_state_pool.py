@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from sglang.srt.utils.common import is_pin_memory_available
+from sglang.srt.utils import is_pin_memory_available
 
 
 @dataclass(frozen=True, kw_only=True)

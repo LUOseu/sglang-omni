@@ -39,7 +39,6 @@ def create_thinker_scheduler(
     """Create the Qwen thinker scheduler."""
     # Note (Junnan Li): The engine, runner and scheduler imports stay in the factory: this module is imported by the platform layer before a device exists.
     from sglang.srt.arg_groups.model_override_base import resolved_view
-    from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
     from sglang_omni.model_runner.thinker_model_runner import ThinkerModelRunner
     from sglang_omni.models.qwen3_omni.request_builders import (
@@ -63,6 +62,7 @@ def create_thinker_scheduler(
     from sglang_omni.scheduling.omni_scheduler import OmniScheduler
     from sglang_omni.scheduling.sglang_backend import SGLangOutputProcessor
     from sglang_omni.utils import cuda_graph_batch_validator
+    from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
     from sglang_omni.vendor.sglang.server_args import override_server_args
 
     prefill_graph_backend = get_prefill_cuda_graph_backend(server_args)
@@ -239,8 +239,6 @@ def create_talker_scheduler(
 ) -> "QwenTalkerScheduler":
     """Create the Qwen talker scheduler."""
     del speech_enabled
-    from sglang.srt.utils.hf_transformers_utils import get_tokenizer
-
     from sglang_omni.models.qwen3_omni.request_builders import (
         make_talker_scheduler_adapters,
     )
@@ -259,6 +257,7 @@ def create_talker_scheduler(
     )
     from sglang_omni.scheduling.sglang_backend import SGLangOutputProcessor
     from sglang_omni.utils import cuda_graph_batch_validator
+    from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
 
     want_cuda_graph = configure_talker_server_args(
         server_args,

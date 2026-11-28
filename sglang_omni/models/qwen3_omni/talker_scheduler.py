@@ -13,7 +13,7 @@ from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils.common import async_h2d
+from sglang.srt.utils import async_h2d
 from typing_extensions import Unpack
 
 from sglang_omni.models.qwen3_omni.config import TALKER_START_MIN_CHUNKS

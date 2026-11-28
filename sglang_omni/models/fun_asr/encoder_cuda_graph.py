@@ -27,7 +27,7 @@ import threading
 from typing import List, Optional, Tuple
 
 import torch
-from sglang.srt.utils.common import get_available_gpu_memory
+from sglang.srt.utils import get_available_gpu_memory
 
 from sglang_omni.platforms import current_platform
 from sglang_omni.platforms.device_graph import DeviceGraphBackend

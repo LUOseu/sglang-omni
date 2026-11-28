@@ -609,7 +609,7 @@ def test_bootstrap_advertises_seed_only_for_supported_dspark_worker(
         "sglang_omni.scheduling.bootstrap.create_sglang_infrastructure", infrastructure
     )
     monkeypatch.setattr(
-        "sglang.srt.utils.hf_transformers_utils.get_tokenizer",
+        "sglang_omni.vendor.sglang.hf_transformers.get_tokenizer",
         Mock(return_value=tokenizer),
     )
     monkeypatch.setattr(
@@ -669,7 +669,7 @@ def test_linear_drafts_apply_repetition_penalty_in_verify_on_cuda(
         Mock(return_value=(Mock(), None, None, None, model_config)),
     )
     monkeypatch.setattr(
-        "sglang.srt.utils.hf_transformers_utils.get_tokenizer",
+        "sglang_omni.vendor.sglang.hf_transformers.get_tokenizer",
         Mock(return_value=Mock(convert_tokens_to_ids=Mock(return_value=1))),
     )
     monkeypatch.setattr(

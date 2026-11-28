@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch
-from sglang.srt.utils.common import async_h2d, is_pin_memory_available
+from sglang.srt.utils import async_h2d, is_pin_memory_available
 
 
 def segment_chat_template(

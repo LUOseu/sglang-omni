@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 import torch
 from safetensors import safe_open
-from sglang.srt.utils.common import async_h2d
+from sglang.srt.utils import async_h2d
 
 from sglang_omni.models.qwen3_omni.components.talker_input import (
     build_prefill_input,

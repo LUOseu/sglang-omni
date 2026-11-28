@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Callable
 
 from sglang.srt.environ import envs
-from sglang.srt.managers.mm_utils import init_mm_embedding_cache
+from sglang.srt.managers.mm_schedule import init_mm_embedding_cache
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import get_hip_version, is_gfx95_supported
 from transformers import (

@@ -17,7 +17,6 @@ import numpy as np
 import numpy.typing as npt
 import torch
 import xxhash
-from sglang.srt.utils.hf_transformers.common import get_context_length
 from tokenizers.normalizers import NFC
 from transformers import AutoConfig, BatchFeature, PreTrainedTokenizerBase
 from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import (
@@ -56,6 +55,7 @@ from sglang_omni.preprocessing.transcription import prepare_audio
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
 from sglang_omni.utils.audio import AudioDecodeError
+from sglang_omni.vendor.sglang.hf_transformers import get_context_length
 
 logger = logging.getLogger(__name__)
 

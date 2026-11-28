@@ -9,7 +9,6 @@ from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
 from sglang.srt.mem_cache.memory_pool import KVCache, MHATokenToKVPool, ReqToTokenPool
 from sglang.srt.models.registry import ModelRegistry
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 from transformers import PreTrainedTokenizerBase
 
 from sglang_omni.model_runner.model_worker import ModelWorker
@@ -29,6 +28,7 @@ from sglang_omni.models.minicpm_o.session_adapters import ThinkerAdapter
 from sglang_omni.scheduling.engine_factory import SGLangGenerationEngineBuilder
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
+from sglang_omni.vendor.sglang.hf_transformers import get_tokenizer
 
 
 def check_window_kv_cache(window: MiniCPMODuplexWindow, kv_cache: KVCache) -> None:
